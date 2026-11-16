@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantamental-ai-backend"
+version = "0.1.0"
+description = "Quantamental AI - AI-Augmented Portfolio Optimization & Financial Research Platform (Backend)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Quantamental AI Team" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+]
+
+dependencies = [
+    "fastapi>=0.115.0,<0.116.0",
+    "uvicorn[standard]>=0.32.0,<0.35.0",
+    "pydantic>=2.10.0,<2.11.0",
+    "pydantic-settings>=2.6.0,<2.8.0",
+    "pandas>=2.2.0,<2.3.0",
+    "yfinance>=0.2.40,<0.3.0",
+    "pyarrow>=17.0.0,<19.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0,<8.4.0",
+    "pytest-asyncio>=0.24.0,<0.26.0",
+    "httpx>=0.27.0,<0.29.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

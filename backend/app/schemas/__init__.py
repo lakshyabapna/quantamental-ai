@@ -1,0 +1,1 @@
+"""Quantamental AI - Pydantic Schemas."""
