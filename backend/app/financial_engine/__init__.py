@@ -7,6 +7,8 @@ from app.portfolio_engine import (
     calculate_log_returns,
     calculate_simple_returns,
     calculate_sample_covariance,
+    calculate_ledoit_wolf_covariance,
+    fit_ledoit_wolf,
     compute_returns_summary,
 )
 
@@ -17,5 +19,7 @@ __all__ = [
     "calculate_log_returns",
     "calculate_simple_returns",
     "calculate_sample_covariance",
+    "calculate_ledoit_wolf_covariance",
+    "fit_ledoit_wolf",
     "compute_returns_summary",
 ]

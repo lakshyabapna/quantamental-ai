@@ -18,6 +18,10 @@ from app.portfolio_engine.returns import (
     calculate_simple_returns,
     compute_returns_summary,
 )
+from app.portfolio_engine.shrinkage import (
+    calculate_ledoit_wolf_covariance,
+    fit_ledoit_wolf,
+)
 
 __all__ = [
     # Returns (Phase 2.1)
@@ -29,4 +33,7 @@ __all__ = [
     "compute_returns_summary",
     # Covariance (Phase 2.2 Step 1)
     "calculate_sample_covariance",
+    # Shrinkage (Phase 2.2 Step 2)
+    "calculate_ledoit_wolf_covariance",
+    "fit_ledoit_wolf",
 ]
