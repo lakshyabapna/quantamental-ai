@@ -9,6 +9,7 @@ from app.portfolio_engine import (
     calculate_sample_covariance,
     calculate_ledoit_wolf_covariance,
     fit_ledoit_wolf,
+    regularize_covariance_higham,
     compute_returns_summary,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "calculate_sample_covariance",
     "calculate_ledoit_wolf_covariance",
     "fit_ledoit_wolf",
+    "regularize_covariance_higham",
     "compute_returns_summary",
 ]

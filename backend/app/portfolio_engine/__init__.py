@@ -10,6 +10,7 @@ Implements deterministic, audited quantitative finance models:
 """
 
 from app.portfolio_engine.covariance import calculate_sample_covariance
+from app.portfolio_engine.regularization import regularize_covariance_higham
 from app.portfolio_engine.returns import (
     ReturnsResult,
     calculate_cagr,
@@ -36,4 +37,6 @@ __all__ = [
     # Shrinkage (Phase 2.2 Step 2)
     "calculate_ledoit_wolf_covariance",
     "fit_ledoit_wolf",
+    # Regularization (Phase 2.2 Step 3)
+    "regularize_covariance_higham",
 ]

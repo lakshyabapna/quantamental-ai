@@ -310,3 +310,15 @@ class CovarianceValidationError(FinancialCalculationError):
             status_code=422,
             details=details,
         )
+
+
+class HighamConvergenceError(FinancialCalculationError):
+    """Raised when Higham alternating projection fails to converge within max_iterations."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="HIGHAM_CONVERGENCE_ERROR",
+            status_code=422,
+            details=details,
+        )
