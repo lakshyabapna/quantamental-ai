@@ -239,3 +239,58 @@ class IllConditionedMatrixError(OptimizationException):
             status_code=422,
             details=details,
         )
+
+
+# Financial Calculation Exceptions
+class FinancialCalculationError(QuantamentalException):
+    """Base exception for mathematical and financial calculation errors."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "FINANCIAL_CALCULATION_ERROR",
+        status_code: int = 422,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status_code,
+            details=details,
+        )
+
+
+class InsufficientDataError(FinancialCalculationError):
+    """Raised when there are fewer observations than the minimum required for calculation."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="INSUFFICIENT_DATA_ERROR",
+            status_code=422,
+            details=details,
+        )
+
+
+class InvalidPriceError(FinancialCalculationError):
+    """Raised when asset prices are non-positive, NaN, infinite, or malformed."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="INVALID_PRICE_ERROR",
+            status_code=422,
+            details=details,
+        )
+
+
+class UnalignedObservationsError(FinancialCalculationError):
+    """Raised when cross-sectional observations cannot be aligned on a common observation window."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="UNALIGNED_OBSERVATIONS_ERROR",
+            status_code=422,
+            details=details,
+        )
