@@ -294,3 +294,19 @@ class UnalignedObservationsError(FinancialCalculationError):
             status_code=422,
             details=details,
         )
+
+
+class CovarianceValidationError(FinancialCalculationError):
+    """Raised when a computed covariance matrix fails post-calculation validation.
+
+    Examples include non-finite entries or failed symmetry checks.
+    See ARCHITECTURE.md §4.2 and FINANCIAL_METHODOLOGY.md §4.1.
+    """
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="COVARIANCE_VALIDATION_ERROR",
+            status_code=422,
+            details=details,
+        )

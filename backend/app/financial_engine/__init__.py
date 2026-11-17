@@ -6,6 +6,7 @@ from app.portfolio_engine import (
     calculate_expected_returns,
     calculate_log_returns,
     calculate_simple_returns,
+    calculate_sample_covariance,
     compute_returns_summary,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "calculate_expected_returns",
     "calculate_log_returns",
     "calculate_simple_returns",
+    "calculate_sample_covariance",
     "compute_returns_summary",
 ]
