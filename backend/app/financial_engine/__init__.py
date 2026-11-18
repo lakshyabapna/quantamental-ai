@@ -11,6 +11,8 @@ from app.portfolio_engine import (
     fit_ledoit_wolf,
     regularize_covariance_higham,
     compute_returns_summary,
+    OptimizationResult,
+    optimize_global_minimum_variance,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "fit_ledoit_wolf",
     "regularize_covariance_higham",
     "compute_returns_summary",
+    "OptimizationResult",
+    "optimize_global_minimum_variance",
 ]
