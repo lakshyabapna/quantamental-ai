@@ -27,6 +27,11 @@ from app.portfolio_engine.shrinkage import (
     calculate_ledoit_wolf_covariance,
     fit_ledoit_wolf,
 )
+from app.portfolio_engine.tangency import (
+    TangencyOptimizationResult,
+    optimize_maximum_sharpe_ratio,
+    optimize_tangency_portfolio,
+)
 
 __all__ = [
     # Returns (Phase 2.1)
@@ -43,7 +48,10 @@ __all__ = [
     "fit_ledoit_wolf",
     # Regularization (Phase 2.2 Step 3)
     "regularize_covariance_higham",
-    # Optimization (Phase 2.3 Step 1)
+    # Optimization (Phase 2.3 Step 1 & Step 2)
     "OptimizationResult",
     "optimize_global_minimum_variance",
+    "TangencyOptimizationResult",
+    "optimize_maximum_sharpe_ratio",
+    "optimize_tangency_portfolio",
 ]

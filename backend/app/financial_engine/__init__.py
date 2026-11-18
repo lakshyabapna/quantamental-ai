@@ -13,6 +13,9 @@ from app.portfolio_engine import (
     compute_returns_summary,
     OptimizationResult,
     optimize_global_minimum_variance,
+    TangencyOptimizationResult,
+    optimize_maximum_sharpe_ratio,
+    optimize_tangency_portfolio,
 )
 
 __all__ = [
@@ -28,4 +31,7 @@ __all__ = [
     "compute_returns_summary",
     "OptimizationResult",
     "optimize_global_minimum_variance",
+    "TangencyOptimizationResult",
+    "optimize_maximum_sharpe_ratio",
+    "optimize_tangency_portfolio",
 ]
