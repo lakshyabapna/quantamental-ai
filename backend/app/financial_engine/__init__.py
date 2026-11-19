@@ -19,6 +19,14 @@ from app.portfolio_engine import (
     EfficientFrontierResult,
     FrontierPortfolio,
     compute_efficient_frontier,
+    CALCoordinate,
+    CALPoint,
+    CALResult,
+    CapitalAllocationLineResult,
+    calculate_cal_return,
+    calculate_cal_slope,
+    generate_cal_coordinates,
+    generate_capital_allocation_line,
 )
 
 __all__ = [
@@ -40,4 +48,12 @@ __all__ = [
     "EfficientFrontierResult",
     "FrontierPortfolio",
     "compute_efficient_frontier",
+    "CALCoordinate",
+    "CALPoint",
+    "CALResult",
+    "CapitalAllocationLineResult",
+    "calculate_cal_return",
+    "calculate_cal_slope",
+    "generate_cal_coordinates",
+    "generate_capital_allocation_line",
 ]

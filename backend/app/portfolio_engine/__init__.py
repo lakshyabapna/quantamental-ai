@@ -37,6 +37,16 @@ from app.portfolio_engine.efficient_frontier import (
     FrontierPortfolio,
     compute_efficient_frontier,
 )
+from app.portfolio_engine.cal import (
+    CALCoordinate,
+    CALPoint,
+    CALResult,
+    CapitalAllocationLineResult,
+    calculate_cal_return,
+    calculate_cal_slope,
+    generate_cal_coordinates,
+    generate_capital_allocation_line,
+)
 
 __all__ = [
     # Returns (Phase 2.1)
@@ -53,7 +63,7 @@ __all__ = [
     "fit_ledoit_wolf",
     # Regularization (Phase 2.2 Step 3)
     "regularize_covariance_higham",
-    # Optimization (Phase 2.3 Step 1 & Step 2 & Step 3)
+    # Optimization (Phase 2.3 Step 1 & Step 2 & Step 3 & Step 4)
     "OptimizationResult",
     "optimize_global_minimum_variance",
     "TangencyOptimizationResult",
@@ -62,4 +72,13 @@ __all__ = [
     "EfficientFrontierResult",
     "FrontierPortfolio",
     "compute_efficient_frontier",
+    # Capital Allocation Line (Phase 2.3 Step 4)
+    "CALCoordinate",
+    "CALPoint",
+    "CALResult",
+    "CapitalAllocationLineResult",
+    "calculate_cal_return",
+    "calculate_cal_slope",
+    "generate_cal_coordinates",
+    "generate_capital_allocation_line",
 ]
