@@ -16,6 +16,9 @@ from app.portfolio_engine import (
     TangencyOptimizationResult,
     optimize_maximum_sharpe_ratio,
     optimize_tangency_portfolio,
+    EfficientFrontierResult,
+    FrontierPortfolio,
+    compute_efficient_frontier,
 )
 
 __all__ = [
@@ -34,4 +37,7 @@ __all__ = [
     "TangencyOptimizationResult",
     "optimize_maximum_sharpe_ratio",
     "optimize_tangency_portfolio",
+    "EfficientFrontierResult",
+    "FrontierPortfolio",
+    "compute_efficient_frontier",
 ]

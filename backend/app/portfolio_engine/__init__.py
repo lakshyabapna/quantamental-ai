@@ -32,6 +32,11 @@ from app.portfolio_engine.tangency import (
     optimize_maximum_sharpe_ratio,
     optimize_tangency_portfolio,
 )
+from app.portfolio_engine.efficient_frontier import (
+    EfficientFrontierResult,
+    FrontierPortfolio,
+    compute_efficient_frontier,
+)
 
 __all__ = [
     # Returns (Phase 2.1)
@@ -48,10 +53,13 @@ __all__ = [
     "fit_ledoit_wolf",
     # Regularization (Phase 2.2 Step 3)
     "regularize_covariance_higham",
-    # Optimization (Phase 2.3 Step 1 & Step 2)
+    # Optimization (Phase 2.3 Step 1 & Step 2 & Step 3)
     "OptimizationResult",
     "optimize_global_minimum_variance",
     "TangencyOptimizationResult",
     "optimize_maximum_sharpe_ratio",
     "optimize_tangency_portfolio",
+    "EfficientFrontierResult",
+    "FrontierPortfolio",
+    "compute_efficient_frontier",
 ]
