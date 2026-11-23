@@ -1,0 +1,13 @@
+project-includes = [
+    "backend/**/*.py",
+    "notebooks/**/*.ipynb",
+]
+project-excludes = [
+    "backend/venv/**",
+    "**/__pycache__/**",
+    ".git/**",
+]
+python-interpreter-path = "backend/venv/bin/python"
+search-path = [
+    "backend",
+]
