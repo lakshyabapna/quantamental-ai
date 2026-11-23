@@ -49,6 +49,17 @@ from app.portfolio_engine import (
     SimulatedLandmarkPortfolio,
     simulate_monte_carlo_portfolios,
     validate_monte_carlo_against_frontier,
+    DEFAULT_CONFIDENCE_LEVELS,
+    ALLOWED_QUANTILE_METHODS,
+    CornishFisherExpansionResult,
+    RiskMetricsEngine,
+    RiskMetricsResult,
+    calculate_cornish_fisher_expansion,
+    calculate_cornish_fisher_var,
+    calculate_cvar,
+    calculate_historical_var,
+    calculate_parametric_var,
+    calculate_risk_metrics,
 )
 
 __all__ = [
@@ -101,4 +112,16 @@ __all__ = [
     "SimulatedLandmarkPortfolio",
     "simulate_monte_carlo_portfolios",
     "validate_monte_carlo_against_frontier",
+    # Risk Metrics Engine (Phase 2 Task 7)
+    "ALLOWED_QUANTILE_METHODS",
+    "DEFAULT_CONFIDENCE_LEVELS",
+    "CornishFisherExpansionResult",
+    "RiskMetricsEngine",
+    "RiskMetricsResult",
+    "calculate_cornish_fisher_expansion",
+    "calculate_cornish_fisher_var",
+    "calculate_cvar",
+    "calculate_historical_var",
+    "calculate_parametric_var",
+    "calculate_risk_metrics",
 ]
