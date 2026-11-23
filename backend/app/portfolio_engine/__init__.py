@@ -63,6 +63,16 @@ from app.portfolio_engine.shadow_validator import (
     validate_gmv,
     validate_tangency,
 )
+from app.portfolio_engine.monte_carlo import (
+    DEFAULT_NUM_PORTFOLIOS,
+    DEFAULT_RISK_FREE_RATE,
+    MonteCarloSimulationResult,
+    MonteCarloSimulator,
+    MonteCarloValidationResult,
+    SimulatedLandmarkPortfolio,
+    simulate_monte_carlo_portfolios,
+    validate_monte_carlo_against_frontier,
+)
 
 __all__ = [
     # Returns (Phase 2.1)
@@ -112,4 +122,13 @@ __all__ = [
     "validate_efficient_frontier",
     "validate_gmv",
     "validate_tangency",
+    # Monte Carlo Simulation (Phase 2.5)
+    "DEFAULT_NUM_PORTFOLIOS",
+    "DEFAULT_RISK_FREE_RATE",
+    "MonteCarloSimulationResult",
+    "MonteCarloSimulator",
+    "MonteCarloValidationResult",
+    "SimulatedLandmarkPortfolio",
+    "simulate_monte_carlo_portfolios",
+    "validate_monte_carlo_against_frontier",
 ]
