@@ -47,6 +47,22 @@ from app.portfolio_engine.cal import (
     generate_cal_coordinates,
     generate_capital_allocation_line,
 )
+from app.portfolio_engine.shadow_validator import (
+    DEFAULT_VALIDATION_TOLERANCES,
+    FrontierPointValidation,
+    FrontierValidationResult,
+    GMVValidationResult,
+    PortfolioMetrics,
+    PyPortfolioOptShadowValidator,
+    ShadowValidator,
+    TangencyValidationResult,
+    ValidationDifferences,
+    ValidationStatus,
+    ValidationTolerances,
+    validate_efficient_frontier,
+    validate_gmv,
+    validate_tangency,
+)
 
 __all__ = [
     # Returns (Phase 2.1)
@@ -81,4 +97,19 @@ __all__ = [
     "calculate_cal_slope",
     "generate_cal_coordinates",
     "generate_capital_allocation_line",
+    # Shadow Validation (Phase 2.4 Step 1)
+    "DEFAULT_VALIDATION_TOLERANCES",
+    "FrontierPointValidation",
+    "FrontierValidationResult",
+    "GMVValidationResult",
+    "PortfolioMetrics",
+    "PyPortfolioOptShadowValidator",
+    "ShadowValidator",
+    "TangencyValidationResult",
+    "ValidationDifferences",
+    "ValidationStatus",
+    "ValidationTolerances",
+    "validate_efficient_frontier",
+    "validate_gmv",
+    "validate_tangency",
 ]
