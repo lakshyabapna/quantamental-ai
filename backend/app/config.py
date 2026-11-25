@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # Data Engine & Storage Settings
     PARQUET_STORAGE_DIR: str = "data/parquet"
     CACHE_DIR: str = "data/cache"
+    MODEL_ARTIFACT_DIR: str = "data/models"
     DEFAULT_ROLLING_WINDOW_YEARS: int = 5
 
     # Quantitative Financial Defaults

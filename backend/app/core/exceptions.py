@@ -322,3 +322,58 @@ class HighamConvergenceError(FinancialCalculationError):
             status_code=422,
             details=details,
         )
+
+
+# AI Engine Exceptions
+class AIEngineException(QuantamentalException):
+    """Base exception for AI Risk Lab feature engineering, splitting, modeling, and registry."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "AI_ENGINE_ERROR",
+        status_code: int = 422,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status_code,
+            details=details,
+        )
+
+
+class DataLeakageError(AIEngineException):
+    """Raised when temporal ordering, purge-gap, or anti-leakage invariants are violated."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="DATA_LEAKAGE_ERROR",
+            status_code=422,
+            details=details,
+        )
+
+
+class ModelConvergenceError(AIEngineException):
+    """Raised when a statistical or ML model fails to converge or produces non-finite state."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="MODEL_CONVERGENCE_ERROR",
+            status_code=422,
+            details=details,
+        )
+
+
+class ArtifactIntegrityError(AIEngineException):
+    """Raised when a serialized model artifact fails hash verification, path safety, or schema checks."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="ARTIFACT_INTEGRITY_ERROR",
+            status_code=422,
+            details=details,
+        )
