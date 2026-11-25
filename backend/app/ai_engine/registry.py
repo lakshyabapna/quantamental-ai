@@ -170,7 +170,7 @@ class ModelRegistry:
             "artifact_format": artifact_format,
             "artifact_filename": artifact_filename,
             "hyperparameters": hyperparameters or {},
-            "random_seed": int(random_seed),
+            "random_seed": random_seed,
             "data_snapshot_hash": data_snapshot_hash,
             "train_start_date": train_start_date,
             "train_end_date": train_end_date,
