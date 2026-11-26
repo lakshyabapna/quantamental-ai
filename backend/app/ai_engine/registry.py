@@ -60,7 +60,7 @@ class ModelManifest:
 def _collect_dependency_versions() -> Dict[str, str]:
     """Capture runtime Python and core library versions without importing optional ML libs."""
     versions: Dict[str, str] = {"python": platform.python_version()}
-    for pkg in ("numpy", "pandas", "scipy", "scikit-learn", "joblib", "pydantic"):
+    for pkg in ("numpy", "pandas", "scipy", "scikit-learn", "joblib", "pydantic", "xgboost", "shap"):
         try:
             versions[pkg] = importlib.metadata.version(pkg)
         except importlib.metadata.PackageNotFoundError:

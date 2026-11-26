@@ -18,7 +18,8 @@ Key design properties:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,10 @@ from app.ai_engine.baselines import (
 from app.ai_engine.feature_pipeline import FeatureDataset, build_volatility_features
 from app.ai_engine.metrics import BaselineMetrics, mae, qlike, r_squared, rmse
 from app.ai_engine.splitters import SplitMode, WalkForwardSplitter, scale_fold_features
+from app.ai_engine.tree_models import (
+    TunedXGBoostVolatilityRegressor,
+    XGBoostVolatilityRegressor,
+)
 from app.core.exceptions import AIEngineException, InsufficientDataError
 
 
@@ -151,7 +156,12 @@ def evaluate_baselines(
 
     results: Dict[str, List[BaselineMetrics]] = {b.model_name: [] for b in baselines}
 
-    _feature_extractors = (RollingVolBaseline, RollingMeanBaseline)
+    _feature_extractors = (
+        RollingVolBaseline,
+        RollingMeanBaseline,
+        XGBoostVolatilityRegressor,
+        TunedXGBoostVolatilityRegressor,
+    )
     _regression_models = (OLSBaseline, RidgeBaseline)
 
     n_folds = 0
@@ -379,3 +389,266 @@ def aggregate_metrics(
     df = pd.DataFrame(rows)
     df = df.sort_values("pooled_rmse", ascending=True).reset_index(drop=True)
     return df
+
+
+STAGE1_BASELINE_NAMES: Tuple[str, ...] = (
+    "rolling_vol_21d",
+    "rolling_vol_63d",
+    "rolling_mean_21d",
+    "ols",
+    "ridge_alpha_1",
+)
+# Guardrail thresholds for Gate 3.2:
+# - MAE deterioration <= +5.0% prevents RMSE wins achieved by distorting typical absolute errors.
+# - Normalized QLIKE deterioration <= +0.05 prevents variance-ratio / tail calibration collapse.
+DEFAULT_GATE32_MAX_MAE_DETERIORATION_PCT: float = 5.0
+DEFAULT_GATE32_MAX_QLIKE_DETERIORATION: float = 0.05
+_GATE32_TARGET_RTOL: float = 1e-12
+_GATE32_TARGET_ATOL: float = 1e-12
+_GATE32_REQUIRED_SUMMARY_COLS: Tuple[str, ...] = (
+    "model_name",
+    "pooled_rmse",
+    "pooled_mae",
+    "pooled_qlike",
+    "pooled_r2",
+    "floored_pct",
+)
+
+
+@dataclass(frozen=True)
+class Gate32Report:
+    """Gate 3.2 comparison summary between Stage 2 XGBoost and Phase 3.1 baselines."""
+
+    xgb_model_name: str
+    best_baseline_name: str
+    baseline_names: Tuple[str, ...]
+    xgb_pooled_rmse: float
+    best_baseline_pooled_rmse: float
+    rmse_improvement_pct: float
+    primary_rmse_improved: bool
+    xgb_pooled_mae: float
+    best_baseline_pooled_mae: float
+    mae_deterioration_pct: float
+    mae_guardrail_passed: bool
+    xgb_pooled_qlike: float
+    best_baseline_pooled_qlike: float
+    qlike_deterioration: float
+    qlike_guardrail_passed: bool
+    xgb_pooled_r2: float
+    xgb_floored_pct: float
+    fold_win_rate: float
+    n_folds: int
+    gate_passed: bool
+
+
+def evaluate_stage2_gate(
+    fold_results: Dict[str, List[BaselineMetrics]],
+    summary_df: pd.DataFrame,
+    *,
+    xgb_model_name: str = "xgboost_tuned",
+    baseline_names: Optional[Sequence[str]] = None,
+    max_mae_deterioration_pct: float = DEFAULT_GATE32_MAX_MAE_DETERIORATION_PCT,
+    max_qlike_deterioration: float = DEFAULT_GATE32_MAX_QLIKE_DETERIORATION,
+) -> Gate32Report:
+    """Evaluate Gate 3.2 criteria comparing XGBoost exclusively against Phase 3.1 baselines.
+
+    Primary criterion:
+        ``xgb_pooled_rmse < best_baseline_pooled_rmse``
+    Guardrails (preventing primary RMSE pass when secondary calibration degrades;
+    both guardrails compare against the same best Stage 1 baseline selected by
+    ``pooled_rmse``):
+        - ``mae_deterioration_pct <= max_mae_deterioration_pct`` (default +5.0%)
+        - ``qlike_deterioration <= max_qlike_deterioration`` (default +0.05;
+          non-finite QLIKE on either XGBoost or the comparator fails safely)
+    """
+    if (
+        isinstance(max_mae_deterioration_pct, bool)
+        or not np.isfinite(float(max_mae_deterioration_pct))
+        or float(max_mae_deterioration_pct) < 0.0
+    ):
+        raise AIEngineException("max_mae_deterioration_pct must be finite and >= 0.")
+    if (
+        isinstance(max_qlike_deterioration, bool)
+        or not np.isfinite(float(max_qlike_deterioration))
+        or float(max_qlike_deterioration) < 0.0
+    ):
+        raise AIEngineException("max_qlike_deterioration must be finite and >= 0.")
+
+    resolved_baselines = (
+        STAGE1_BASELINE_NAMES if baseline_names is None else tuple(baseline_names)
+    )
+    if not resolved_baselines or len(set(resolved_baselines)) != len(resolved_baselines):
+        raise AIEngineException(
+            "evaluate_stage2_gate: baseline_names must be non-empty and unique."
+        )
+    if xgb_model_name in resolved_baselines:
+        raise AIEngineException(
+            f"evaluate_stage2_gate: '{xgb_model_name}' cannot be included in baseline_names."
+        )
+    for b_name in resolved_baselines:
+        if b_name.startswith("xgboost"):
+            raise AIEngineException(
+                f"evaluate_stage2_gate: Stage 2 model '{b_name}' must not be used as a Stage 1 baseline."
+            )
+
+    missing_cols = [c for c in _GATE32_REQUIRED_SUMMARY_COLS if c not in summary_df.columns]
+    if missing_cols:
+        raise AIEngineException(
+            f"evaluate_stage2_gate: summary_df missing required columns: {missing_cols}."
+        )
+    if summary_df["model_name"].duplicated().any():
+        raise AIEngineException(
+            "evaluate_stage2_gate: summary_df contains duplicate model_name rows."
+        )
+
+    required_models = (xgb_model_name, *resolved_baselines)
+    for m_name in required_models:
+        if m_name not in fold_results:
+            raise AIEngineException(
+                f"evaluate_stage2_gate: required model '{m_name}' missing from fold_results."
+            )
+        matching_rows = summary_df[summary_df["model_name"] == m_name]
+        if len(matching_rows) != 1:
+            raise AIEngineException(
+                f"evaluate_stage2_gate: expected exactly 1 summary_df row for '{m_name}', "
+                f"found {len(matching_rows)}."
+            )
+        row_m = matching_rows.iloc[0]
+        for metric_col in ("pooled_rmse", "pooled_mae"):
+            val_m = float(row_m[metric_col])
+            if not np.isfinite(val_m) or val_m < 0.0:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: '{m_name}' has invalid {metric_col}={val_m!r}."
+                )
+
+    xgb_folds = fold_results[xgb_model_name]
+    if not xgb_folds:
+        raise AIEngineException(f"evaluate_stage2_gate: '{xgb_model_name}' has no folds.")
+
+    for m_name in required_models:
+        for f in fold_results[m_name]:
+            if f.n_samples < 1:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: model '{m_name}' fold {f.fold_id} has n_samples={f.n_samples}."
+                )
+            if len(f.oos_dates) != f.n_samples:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: model '{m_name}' fold {f.fold_id} has incomplete "
+                    f"oos_dates ({len(f.oos_dates)} != n_samples={f.n_samples})."
+                )
+            if len(f.oos_y_true) != f.n_samples:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: model '{m_name}' fold {f.fold_id} has incomplete "
+                    f"oos_y_true ({len(f.oos_y_true)} != n_samples={f.n_samples})."
+                )
+            if not np.all(np.isfinite(np.asarray(f.oos_y_true, dtype=np.float64))):
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: model '{m_name}' fold {f.fold_id} contains non-finite oos_y_true."
+                )
+
+    for b_name in resolved_baselines:
+        b_folds = fold_results[b_name]
+        if len(b_folds) != len(xgb_folds):
+            raise AIEngineException(
+                f"evaluate_stage2_gate: baseline '{b_name}' fold count ({len(b_folds)}) "
+                f"does not match '{xgb_model_name}' ({len(xgb_folds)})."
+            )
+        for xf, bf in zip(xgb_folds, b_folds):
+            if bf.fold_id != xf.fold_id:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: baseline '{b_name}' fold_id {bf.fold_id} "
+                    f"does not match '{xgb_model_name}' fold_id {xf.fold_id}."
+                )
+            if bf.n_samples != xf.n_samples:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: baseline '{b_name}' fold {bf.fold_id} "
+                    f"n_samples={bf.n_samples} != {xf.n_samples}."
+                )
+            if bf.horizon_days != xf.horizon_days:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: baseline '{b_name}' fold {bf.fold_id} "
+                    f"horizon_days={bf.horizon_days} != {xf.horizon_days}."
+                )
+            if bf.oos_dates != xf.oos_dates:
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: baseline '{b_name}' fold {bf.fold_id} "
+                    f"oos_dates do not match '{xgb_model_name}'."
+                )
+            if len(bf.oos_y_true) != len(xf.oos_y_true) or not np.allclose(
+                np.asarray(bf.oos_y_true, dtype=np.float64),
+                np.asarray(xf.oos_y_true, dtype=np.float64),
+                rtol=_GATE32_TARGET_RTOL,
+                atol=_GATE32_TARGET_ATOL,
+            ):
+                raise AIEngineException(
+                    f"evaluate_stage2_gate: baseline '{b_name}' fold {bf.fold_id} "
+                    f"oos_y_true targets do not match '{xgb_model_name}'."
+                )
+
+    base_df = summary_df[summary_df["model_name"].isin(resolved_baselines)]
+    best_base_row = base_df.sort_values("pooled_rmse", ascending=True).iloc[0]
+    xgb_row = summary_df[summary_df["model_name"] == xgb_model_name].iloc[0]
+
+    best_base_name = str(best_base_row["model_name"])
+    best_base_rmse = float(best_base_row["pooled_rmse"])
+    xgb_rmse = float(xgb_row["pooled_rmse"])
+    improvement_pct = (
+        100.0 * (best_base_rmse - xgb_rmse) / best_base_rmse
+        if best_base_rmse > 0.0
+        else 0.0
+    )
+    primary_rmse_improved = bool(xgb_rmse < best_base_rmse)
+
+    best_base_mae = float(best_base_row["pooled_mae"])
+    xgb_mae = float(xgb_row["pooled_mae"])
+    mae_det_pct = (
+        100.0 * (xgb_mae - best_base_mae) / best_base_mae
+        if best_base_mae > 0.0
+        else (0.0 if xgb_mae == 0.0 else float("inf"))
+    )
+    mae_guardrail_passed = bool(
+        np.isfinite(xgb_mae) and mae_det_pct <= float(max_mae_deterioration_pct)
+    )
+
+    best_base_qlike = float(best_base_row["pooled_qlike"])
+    xgb_qlike = float(xgb_row["pooled_qlike"])
+    qlike_det = xgb_qlike - best_base_qlike
+    qlike_guardrail_passed = bool(
+        np.isfinite(xgb_qlike)
+        and np.isfinite(best_base_qlike)
+        and qlike_det <= float(max_qlike_deterioration)
+    )
+
+    n_folds = len(xgb_folds)
+    wins = 0
+    for idx in range(n_folds):
+        fold_best_base_rmse = min(fold_results[b][idx].rmse for b in resolved_baselines)
+        if xgb_folds[idx].rmse < fold_best_base_rmse:
+            wins += 1
+
+    gate_passed = bool(
+        primary_rmse_improved and mae_guardrail_passed and qlike_guardrail_passed
+    )
+
+    return Gate32Report(
+        xgb_model_name=xgb_model_name,
+        best_baseline_name=best_base_name,
+        baseline_names=resolved_baselines,
+        xgb_pooled_rmse=xgb_rmse,
+        best_baseline_pooled_rmse=best_base_rmse,
+        rmse_improvement_pct=float(improvement_pct),
+        primary_rmse_improved=primary_rmse_improved,
+        xgb_pooled_mae=xgb_mae,
+        best_baseline_pooled_mae=best_base_mae,
+        mae_deterioration_pct=float(mae_det_pct),
+        mae_guardrail_passed=mae_guardrail_passed,
+        xgb_pooled_qlike=xgb_qlike,
+        best_baseline_pooled_qlike=best_base_qlike,
+        qlike_deterioration=float(qlike_det),
+        qlike_guardrail_passed=qlike_guardrail_passed,
+        xgb_pooled_r2=float(xgb_row["pooled_r2"]),
+        xgb_floored_pct=float(xgb_row["floored_pct"]),
+        fold_win_rate=float(wins / n_folds),
+        n_folds=n_folds,
+        gate_passed=gate_passed,
+    )

@@ -10,6 +10,11 @@ Step 3.1 Historical Baseline Models:
       and explicit ForecastFloorPolicy / apply_volatility_floor post-processing.
     - ``metrics``: RMSE, MAE, R², normalized Patton (2011) QLIKE, and BaselineMetrics.
     - ``evaluation``: Walk-forward evaluation harness (``evaluate_baselines``, ``aggregate_metrics``).
+
+Step 3.2 XGBoost Volatility Forecasting + TreeSHAP Explainability:
+    - ``tree_models``: XGBoostVolatilityRegressor (fixed), TunedXGBoostVolatilityRegressor
+      (nested purged chronological tuning), and XGBoostHyperparameters.
+    - ``explainability``: TreeSHAP global and local explanations with additivity checks.
 """
 
 from app.ai_engine.baselines import (
@@ -24,8 +29,19 @@ from app.ai_engine.baselines import (
     apply_volatility_floor,
 )
 from app.ai_engine.evaluation import (
+    DEFAULT_GATE32_MAX_MAE_DETERIORATION_PCT,
+    DEFAULT_GATE32_MAX_QLIKE_DETERIORATION,
+    STAGE1_BASELINE_NAMES,
+    Gate32Report,
     aggregate_metrics,
     evaluate_baselines,
+    evaluate_stage2_gate,
+)
+from app.ai_engine.explainability import (
+    GlobalShapSummary,
+    LocalShapExplanation,
+    compute_global_shap,
+    explain_single_prediction,
 )
 from app.ai_engine.feature_pipeline import (
     DEFAULT_HORIZON_DAYS,
@@ -53,17 +69,29 @@ from app.ai_engine.splitters import (
     WalkForwardSplitter,
     scale_fold_features,
 )
+from app.ai_engine.tree_models import (
+    DEFAULT_XGBOOST_PARAM_GRID,
+    TunedXGBoostVolatilityRegressor,
+    XGBoostHyperparameters,
+    XGBoostVolatilityRegressor,
+)
 
 __all__ = [
     "ArtifactFormat",
     "BaselineMetrics",
     "BaselinePredictor",
+    "DEFAULT_GATE32_MAX_MAE_DETERIORATION_PCT",
+    "DEFAULT_GATE32_MAX_QLIKE_DETERIORATION",
     "DEFAULT_HORIZON_DAYS",
     "DEFAULT_MIN_ANNUALIZED_VOL",
     "DEFAULT_RETURN_LAGS",
     "DEFAULT_ROLLING_WINDOWS",
+    "DEFAULT_XGBOOST_PARAM_GRID",
     "FeatureDataset",
     "ForecastFloorPolicy",
+    "Gate32Report",
+    "GlobalShapSummary",
+    "LocalShapExplanation",
     "ModelManifest",
     "ModelRegistry",
     "OLSBaseline",
@@ -72,13 +100,20 @@ __all__ = [
     "RollingMeanBaseline",
     "RollingVolBaseline",
     "ScaledFoldData",
+    "STAGE1_BASELINE_NAMES",
     "SplitMode",
+    "TunedXGBoostVolatilityRegressor",
     "WalkForwardSplit",
     "WalkForwardSplitter",
+    "XGBoostHyperparameters",
+    "XGBoostVolatilityRegressor",
     "aggregate_metrics",
     "apply_volatility_floor",
     "build_volatility_features",
+    "compute_global_shap",
     "evaluate_baselines",
+    "evaluate_stage2_gate",
+    "explain_single_prediction",
     "mae",
     "qlike",
     "r_squared",
