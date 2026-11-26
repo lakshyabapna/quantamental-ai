@@ -1,13 +1,14 @@
 """Quantamental AI - Walk-Forward Chronological Splitters (Module B).
 
 Provides leak-free expanding-window and rolling-window chronological cross-validation
-splitters with mandatory horizon-aware purge/embargo gaps and train-only feature scaling.
+splitters with mandatory horizon-aware purge/embargo gaps, non-overlapping OOS test
+windows (``step_size >= test_size``), and train-only feature scaling.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator, Literal, Optional, Tuple
+from typing import Iterator, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -38,6 +39,7 @@ class WalkForwardSplit:
     test_start_date: pd.Timestamp
     test_end_date: pd.Timestamp
     purge_gap: int
+    horizon_days: int = 21
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,9 @@ class WalkForwardSplitter:
     For a forward target spanning ``horizon_days`` trading days ``[t, t + horizon_days - 1]``,
     the purge gap between the end of training (or validation) and the start of the next fold
     must be ``>= horizon_days`` so no target window overlaps across splits.
+
+    Furthermore, ``step_size >= test_size`` is enforced so consecutive out-of-sample
+    test windows never overlap or duplicate timestamps.
     """
 
     def __init__(
@@ -74,14 +79,26 @@ class WalkForwardSplitter:
     ) -> None:
         if mode not in ("expanding", "rolling"):
             raise AIEngineException(f"Unsupported split mode: {mode!r}.")
-        if train_size < 1 or test_size < 1 or val_size < 0:
+        if (
+            isinstance(train_size, bool)
+            or isinstance(test_size, bool)
+            or isinstance(val_size, bool)
+            or not isinstance(train_size, int)
+            or not isinstance(test_size, int)
+            or not isinstance(val_size, int)
+            or train_size < 1
+            or test_size < 1
+            or val_size < 0
+        ):
             raise AIEngineException(
-                "train_size and test_size must be >= 1; val_size must be >= 0."
+                "train_size and test_size must be integers >= 1; val_size must be an integer >= 0."
             )
-        if horizon_days < 1:
-            raise AIEngineException("horizon_days must be >= 1.")
+        if isinstance(horizon_days, bool) or not isinstance(horizon_days, int) or horizon_days < 1:
+            raise AIEngineException("horizon_days must be an integer >= 1.")
 
         resolved_purge = horizon_days if purge_gap is None else purge_gap
+        if isinstance(resolved_purge, bool) or not isinstance(resolved_purge, int):
+            raise AIEngineException("purge_gap must be an integer.")
         if resolved_purge < horizon_days:
             raise DataLeakageError(
                 f"purge_gap ({resolved_purge}) must be >= horizon_days ({horizon_days}) "
@@ -90,8 +107,14 @@ class WalkForwardSplitter:
             )
 
         resolved_step = test_size if step_size is None else step_size
-        if resolved_step < 1:
-            raise AIEngineException("step_size must be >= 1.")
+        if isinstance(resolved_step, bool) or not isinstance(resolved_step, int) or resolved_step < 1:
+            raise AIEngineException("step_size must be an integer >= 1.")
+        if resolved_step < test_size:
+            raise AIEngineException(
+                f"step_size ({resolved_step}) must be >= test_size ({test_size}) "
+                "to prevent overlapping out-of-sample test windows.",
+                details={"step_size": resolved_step, "test_size": test_size},
+            )
 
         self.mode: SplitMode = mode
         self.train_size = train_size
@@ -109,6 +132,8 @@ class WalkForwardSplitter:
         """Yield strictly chronological ``WalkForwardSplit`` folds."""
         if not isinstance(X.index, pd.DatetimeIndex):
             raise AIEngineException("X must be indexed by a pd.DatetimeIndex.")
+        if X.index.hasnans:
+            raise AIEngineException("X index contains NaT timestamps.")
         if not X.index.is_monotonic_increasing:
             raise DataLeakageError("X index must be strictly sorted chronologically.")
         if X.index.has_duplicates:
@@ -169,31 +194,154 @@ class WalkForwardSplitter:
                 test_start_date=pd.Timestamp(X.index[test_idx[0]]),
                 test_end_date=pd.Timestamp(X.index[test_idx[-1]]),
                 purge_gap=self.purge_gap,
+                horizon_days=self.horizon_days,
             )
 
             fold_id += 1
             train_end += self.step_size
 
 
+def _validate_split_indices(
+    indices: np.ndarray,
+    n_samples: int,
+    name: str,
+) -> np.ndarray:
+    """Validate that split indices are 1-D, non-empty, integer, unique, strictly increasing, and in-bounds."""
+    arr = np.asarray(indices)
+    if arr.ndim != 1 or len(arr) == 0:
+        raise AIEngineException(
+            f"scale_fold_features: {name} must be a non-empty 1-D array, got shape {arr.shape}."
+        )
+    if arr.dtype == np.bool_ or not np.issubdtype(arr.dtype, np.integer):
+        raise AIEngineException(
+            f"scale_fold_features: {name} must have integer dtype, got {arr.dtype}."
+        )
+    int_arr = arr.astype(np.int64)
+    if np.any(int_arr < 0) or np.any(int_arr >= n_samples):
+        raise AIEngineException(
+            f"scale_fold_features: {name} contains out-of-bounds index for n_samples={n_samples}."
+        )
+    if len(int_arr) > 1 and not np.all(np.diff(int_arr) > 0):
+        raise DataLeakageError(
+            f"scale_fold_features: {name} must be unique and strictly increasing."
+        )
+    return int_arr
+
+
 def scale_fold_features(
     X: pd.DataFrame,
     y: pd.Series,
     split: WalkForwardSplit,
+    *,
+    horizon_days: Optional[int] = None,
 ) -> ScaledFoldData:
     """Slice a walk-forward fold and fit ``StandardScaler`` strictly on training rows.
 
-    Verifies chronological ordering and non-overlap before fitting.
+    Validates X/y index alignment, finiteness, split index integrity (integer, non-empty,
+    unique, strictly increasing, in-bounds), horizon-aware purge gap (``purge_gap >=
+    horizon_days``), date metadata consistency, and chronological ordering before fitting.
     """
-    if split.train_indices[-1] >= split.test_indices[0]:
-        raise DataLeakageError("Training indices must strictly precede test indices.")
-    if split.val_indices is not None:
-        if split.train_indices[-1] >= split.val_indices[0]:
-            raise DataLeakageError("Training indices must strictly precede validation indices.")
-        if split.val_indices[-1] >= split.test_indices[0]:
-            raise DataLeakageError("Validation indices must strictly precede test indices.")
+    if len(X) == 0:
+        raise AIEngineException("scale_fold_features: X must not be empty.")
+    if not isinstance(X.index, pd.DatetimeIndex):
+        raise AIEngineException("scale_fold_features: X must be indexed by a pd.DatetimeIndex.")
+    if X.index.hasnans:
+        raise AIEngineException("scale_fold_features: X index contains NaT timestamps.")
+    if not X.index.is_monotonic_increasing or X.index.has_duplicates:
+        raise DataLeakageError(
+            "scale_fold_features: X index must be strictly increasing without duplicates."
+        )
+    if not X.index.equals(y.index):
+        raise DataLeakageError("scale_fold_features: X and y indices must match exactly.")
 
-    train_list = split.train_indices.tolist()
-    test_list = split.test_indices.tolist()
+    X_vals = np.asarray(X, dtype=np.float64)
+    y_vals = np.asarray(y, dtype=np.float64)
+    if not np.all(np.isfinite(X_vals)):
+        raise AIEngineException("scale_fold_features: X contains NaN or Inf values.")
+    if not np.all(np.isfinite(y_vals)):
+        raise AIEngineException("scale_fold_features: y contains NaN or Inf values.")
+
+    if isinstance(split.horizon_days, bool) or not isinstance(split.horizon_days, int) or split.horizon_days < 1:
+        raise AIEngineException(
+            f"scale_fold_features: split.horizon_days must be an integer >= 1, got {split.horizon_days!r}."
+        )
+    if horizon_days is not None:
+        if isinstance(horizon_days, bool) or not isinstance(horizon_days, int) or horizon_days < 1:
+            raise AIEngineException(
+                f"scale_fold_features: horizon_days must be an integer >= 1, got {horizon_days!r}."
+            )
+        if horizon_days != split.horizon_days:
+            raise DataLeakageError(
+                f"scale_fold_features: split.horizon_days ({split.horizon_days}) does not match "
+                f"expected horizon_days ({horizon_days})."
+            )
+    expected_horizon = split.horizon_days if horizon_days is None else horizon_days
+
+    if isinstance(split.purge_gap, bool) or not isinstance(split.purge_gap, int) or split.purge_gap < 1:
+        raise AIEngineException(
+            f"scale_fold_features: split.purge_gap must be an integer >= 1, got {split.purge_gap!r}."
+        )
+    if split.purge_gap < expected_horizon:
+        raise DataLeakageError(
+            f"scale_fold_features: split.purge_gap ({split.purge_gap}) must be >= "
+            f"horizon_days ({expected_horizon}) to prevent target window overlap."
+        )
+    required_gap = max(split.purge_gap, expected_horizon)
+
+    n_samples = len(X)
+    train_idx = _validate_split_indices(split.train_indices, n_samples, "train_indices")
+    test_idx = _validate_split_indices(split.test_indices, n_samples, "test_indices")
+
+    val_idx: Optional[np.ndarray] = None
+    if split.val_indices is not None:
+        val_idx = _validate_split_indices(split.val_indices, n_samples, "val_indices")
+        if train_idx[-1] >= val_idx[0]:
+            raise DataLeakageError("Training indices must strictly precede validation indices.")
+        if val_idx[-1] >= test_idx[0]:
+            raise DataLeakageError("Validation indices must strictly precede test indices.")
+        if int(val_idx[0] - train_idx[-1] - 1) < required_gap:
+            raise DataLeakageError(
+                "Train-to-validation index gap is smaller than required purge_gap."
+            )
+        if int(test_idx[0] - val_idx[-1] - 1) < required_gap:
+            raise DataLeakageError(
+                "Validation-to-test index gap is smaller than required purge_gap."
+            )
+    else:
+        if train_idx[-1] >= test_idx[0]:
+            raise DataLeakageError("Training indices must strictly precede test indices.")
+        if int(test_idx[0] - train_idx[-1] - 1) < required_gap:
+            raise DataLeakageError(
+                "Train-to-test index gap is smaller than required purge_gap."
+            )
+
+    # Validate split date metadata consistency
+    if pd.Timestamp(split.train_start_date) != pd.Timestamp(X.index[train_idx[0]]):
+        raise DataLeakageError("split.train_start_date does not match first training timestamp.")
+    if pd.Timestamp(split.train_end_date) != pd.Timestamp(X.index[train_idx[-1]]):
+        raise DataLeakageError("split.train_end_date does not match last training timestamp.")
+    if pd.Timestamp(split.test_start_date) != pd.Timestamp(X.index[test_idx[0]]):
+        raise DataLeakageError("split.test_start_date does not match first test timestamp.")
+    if pd.Timestamp(split.test_end_date) != pd.Timestamp(X.index[test_idx[-1]]):
+        raise DataLeakageError("split.test_end_date does not match last test timestamp.")
+
+    if val_idx is not None:
+        if split.val_start_date is None or split.val_end_date is None:
+            raise DataLeakageError(
+                "split.val_start_date and split.val_end_date must be set when val_indices is provided."
+            )
+        if pd.Timestamp(split.val_start_date) != pd.Timestamp(X.index[val_idx[0]]):
+            raise DataLeakageError("split.val_start_date does not match first validation timestamp.")
+        if pd.Timestamp(split.val_end_date) != pd.Timestamp(X.index[val_idx[-1]]):
+            raise DataLeakageError("split.val_end_date does not match last validation timestamp.")
+    else:
+        if split.val_start_date is not None or split.val_end_date is not None:
+            raise DataLeakageError(
+                "split.val_start_date and split.val_end_date must be None when val_indices is None."
+            )
+
+    train_list = train_idx.tolist()
+    test_list = test_idx.tolist()
     X_train_raw = X.iloc[train_list]
     y_train = y.iloc[train_list].copy()
     X_test_raw = X.iloc[test_list]
@@ -205,8 +353,8 @@ def scale_fold_features(
 
     X_val: Optional[pd.DataFrame] = None
     y_val: Optional[pd.Series] = None
-    if split.val_indices is not None:
-        val_list = split.val_indices.tolist()
+    if val_idx is not None:
+        val_list = val_idx.tolist()
         X_val_raw = X.iloc[val_list]
         y_val = y.iloc[val_list].copy()
         val_scaled = scaler.transform(np.asarray(X_val_raw, dtype=np.float64))

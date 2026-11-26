@@ -5,7 +5,7 @@ for forward realized volatility forecasting:
     - Feature timestamps strictly satisfy tau <= t - 1 for target beginning at t.
     - Uses production ``calculate_log_returns`` from ``app.portfolio_engine.returns``.
     - Prohibits ``bfill`` and unconditional ``ffill``.
-    - Explicitly validates missing values, index monotonicity, and minimum history.
+    - Explicitly validates missing values, NaT, duplicates, finiteness, and history.
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ class FeatureDataset:
 
     For every index timestamp ``t`` in ``X.index``:
         - ``X.loc[t]`` is computed strictly from observations at ``tau <= t - 1``.
-        - ``y.loc[t]`` is the forward ``horizon_days`` annualized realized volatility
+        - ``y.loc[t]`` is the forward ``horizon_days`` annualized RMS realized volatility
+          ``sqrt(trading_days_per_year / horizon_days * sum_{i=0}^{h-1} r_{t+i}^2)``
           over ``[t, t + horizon_days - 1]``.
     """
 
@@ -51,6 +52,60 @@ class FeatureDataset:
     target_end_dates: pd.DatetimeIndex
     data_snapshot_hash: str
     metadata: Dict[str, Union[int, float, str, bool]] = field(default_factory=dict)
+
+
+def _window_max_drawdown(window_prices: np.ndarray) -> float:
+    """Compute maximum drawdown within a single price window relative to its running peak."""
+    running_peak = np.maximum.accumulate(window_prices)
+    drawdowns = window_prices / running_peak - 1.0
+    return float(np.min(drawdowns))
+
+
+def _validate_int_sequence(values: Sequence[int], name: str, min_value: int) -> Tuple[int, ...]:
+    """Validate a non-empty sequence of integers >= min_value, rejecting bools and floats."""
+    if isinstance(values, (str, bytes)):
+        raise AIEngineException(f"{name} must be a sequence of integers, got {type(values).__name__}.")
+    validated: list[int] = []
+    for item in values:
+        if isinstance(item, bool) or not isinstance(item, (int, np.integer)):
+            raise AIEngineException(
+                f"{name} must contain only integers (no booleans or floats), got {item!r}."
+            )
+        val = int(item)
+        if val < min_value:
+            if name == "return_lags" and val < 1:
+                raise DataLeakageError(
+                    "All return_lags must be >= 1 so features strictly precede target t."
+                )
+            raise AIEngineException(f"All {name} entries must be >= {min_value}, got {val}.")
+        validated.append(val)
+    unique_sorted = tuple(sorted(set(validated)))
+    if not unique_sorted:
+        raise AIEngineException(f"{name} must not be empty.")
+    return unique_sorted
+
+
+def _validate_datetime_index(series: pd.Series, name: str) -> pd.Series:
+    """Ensure series has a valid, NaT-free, duplicate-free, strictly increasing DatetimeIndex."""
+    if not isinstance(series.index, pd.DatetimeIndex):
+        try:
+            series.index = pd.to_datetime(series.index)
+        except Exception as exc:
+            raise AIEngineException(
+                f"{name} index must be convertible to DatetimeIndex."
+            ) from exc
+
+    if series.index.hasnans:
+        raise AIEngineException(f"{name} index contains NaT timestamps.")
+
+    if series.index.has_duplicates:
+        raise AIEngineException(f"{name} index contains duplicate timestamps.")
+
+    if not series.index.is_monotonic_increasing:
+        raise DataLeakageError(
+            f"{name} index must be strictly sorted in ascending chronological order."
+        )
+    return series
 
 
 def _validate_price_series(
@@ -81,21 +136,7 @@ def _validate_price_series(
             f"{name} must be a pandas Series or DataFrame, got {type(prices).__name__}."
         )
 
-    if not isinstance(series.index, pd.DatetimeIndex):
-        try:
-            series.index = pd.to_datetime(series.index)
-        except Exception as exc:
-            raise AIEngineException(
-                f"{name} index must be convertible to DatetimeIndex."
-            ) from exc
-
-    if series.index.has_duplicates:
-        raise AIEngineException(f"{name} index contains duplicate timestamps.")
-
-    if not series.index.is_monotonic_increasing:
-        raise DataLeakageError(
-            f"{name} index must be strictly sorted in ascending chronological order."
-        )
+    series = _validate_datetime_index(series, name)
 
     if series.isna().any():
         n_missing = int(series.isna().sum())
@@ -114,25 +155,41 @@ def _validate_price_series(
     return series
 
 
+def _hash_series(hasher: "hashlib._Hash", tag: bytes, series: pd.Series) -> None:
+    """Update SHA-256 hasher with series length, int64 timestamps, and float64 values."""
+    hasher.update(tag)
+    hasher.update(f"len={len(series)};".encode("utf-8"))
+    hasher.update(np.asarray(series.index, dtype="datetime64[ns]").astype(np.int64).tobytes())
+    hasher.update(np.asarray(series, dtype=np.float64).tobytes())
+
+
 def _compute_snapshot_hash(
     asset_series: pd.Series,
     benchmark_series: Optional[pd.Series],
     volume_series: Optional[pd.Series],
     horizon_days: int,
+    trading_days_per_year: int,
+    rolling_windows: Tuple[int, ...],
+    return_lags: Tuple[int, ...],
 ) -> str:
-    """Compute deterministic SHA-256 hash of input data and horizon configuration."""
+    """Compute deterministic SHA-256 hash of aligned timestamps, values, and configuration."""
     if not isinstance(asset_series.index, pd.DatetimeIndex):
         raise AIEngineException("asset_series index must be a DatetimeIndex.")
     hasher = hashlib.sha256()
-    hasher.update(f"horizon={horizon_days};len={len(asset_series)};".encode("utf-8"))
-    hasher.update(np.asarray(asset_series.index, dtype="datetime64[ns]").astype(np.int64).tobytes())
-    hasher.update(np.asarray(asset_series, dtype=np.float64).tobytes())
+    cfg = (
+        f"horizon={horizon_days};tdpy={trading_days_per_year};"
+        f"windows={rolling_windows};lags={return_lags};"
+    )
+    hasher.update(cfg.encode("utf-8"))
+    _hash_series(hasher, b"asset:", asset_series)
     if benchmark_series is not None:
-        hasher.update(b"bm:")
-        hasher.update(np.asarray(benchmark_series, dtype=np.float64).tobytes())
+        _hash_series(hasher, b"bm:", benchmark_series)
+    else:
+        hasher.update(b"bm:none;")
     if volume_series is not None:
-        hasher.update(b"vol:")
-        hasher.update(np.asarray(volume_series, dtype=np.float64).tobytes())
+        _hash_series(hasher, b"vol:", volume_series)
+    else:
+        hasher.update(b"vol:none;")
     return hasher.hexdigest()
 
 
@@ -151,6 +208,15 @@ def build_volatility_features(
 ) -> FeatureDataset:
     """Build strictly causal lagged features (tau <= t-1) and forward h-day volatility target.
 
+    Target Definition
+    -----------------
+    The target ``y[t]`` is the forward ``horizon_days`` **annualized root-mean-square
+    (RMS) realized volatility** (uncentered second moment, not sample standard deviation):
+
+        y[t] = sqrt( (trading_days_per_year / horizon_days) * sum_{i=0}^{h-1} r_{t+i}^2 )
+
+    where ``r`` are daily log returns from ``calculate_log_returns``.
+
     Parameters
     ----------
     asset_prices:
@@ -168,7 +234,7 @@ def build_volatility_features(
     horizon_days:
         Forward realized volatility horizon in trading days (default: 21).
     trading_days_per_year:
-        Annualization factor (default: 252).
+        Annualization factor as a positive integer (default: 252).
     rolling_windows:
         Rolling volatility lookback windows ending at ``t - 1`` (default: (5, 10, 21, 63)).
     return_lags:
@@ -183,19 +249,17 @@ def build_volatility_features(
         raise AIEngineException(
             f"horizon_days must be a positive integer, got {horizon_days!r}."
         )
-    if trading_days_per_year < 1:
+    if (
+        isinstance(trading_days_per_year, bool)
+        or not isinstance(trading_days_per_year, int)
+        or trading_days_per_year < 1
+    ):
         raise AIEngineException(
-            f"trading_days_per_year must be >= 1, got {trading_days_per_year!r}."
+            f"trading_days_per_year must be a positive integer, got {trading_days_per_year!r}."
         )
 
-    lags = tuple(sorted(set(return_lags)))
-    windows = tuple(sorted(set(rolling_windows)))
-    if not lags or any(lag < 1 for lag in lags):
-        raise DataLeakageError(
-            "All return_lags must be >= 1 so features strictly precede target t."
-        )
-    if not windows or any(w < 2 for w in windows):
-        raise AIEngineException("All rolling_windows must be >= 2.")
+    lags = _validate_int_sequence(return_lags, "return_lags", min_value=1)
+    windows = _validate_int_sequence(rolling_windows, "rolling_windows", min_value=2)
 
     price_s = _validate_price_series(asset_prices, "asset_prices", target_column=target_column)
 
@@ -215,29 +279,50 @@ def build_volatility_features(
                 vol_s = volumes[col].copy()
             else:
                 raise AIEngineException("Specify volume_column for multi-column volumes.")
-        else:
+        elif isinstance(volumes, pd.Series):
             vol_s = volumes.copy()
-        if not isinstance(vol_s.index, pd.DatetimeIndex):
-            vol_s.index = pd.to_datetime(vol_s.index)
-        if not vol_s.index.is_monotonic_increasing:
-            raise DataLeakageError("volumes index must be sorted chronologically.")
-        if vol_s.isna().any() or (np.asarray(vol_s, dtype=np.float64) < 0.0).any():
-            raise InsufficientDataError(
-                "volumes contains missing or negative observations."
+        else:
+            raise AIEngineException(
+                f"volumes must be a pandas Series or DataFrame, got {type(volumes).__name__}."
             )
+        vol_s = _validate_datetime_index(vol_s, "volumes")
+        if vol_s.isna().any():
+            raise InsufficientDataError("volumes contains missing observations.")
+        vol_values = np.asarray(vol_s, dtype=np.float64)
+        if not np.all(np.isfinite(vol_values)):
+            raise AIEngineException("volumes contains non-finite (Inf/-Inf) observations.")
+        if np.any(vol_values < 0.0):
+            raise AIEngineException("volumes contains negative observations.")
 
-    # Align optional benchmark/volumes strictly by intersection (no ffill/bfill)
+    # Align optional benchmark/volumes strictly without trimming asset_prices
+    # (trimming intermediate asset dates would stitch log returns across missing sessions).
     if bm_s is not None:
-        common_idx = price_s.index.intersection(bm_s.index)
-        if len(common_idx) < len(price_s):
-            price_s = price_s.loc[common_idx]
-        bm_s = bm_s.loc[common_idx]
+        missing_bm = price_s.index.difference(bm_s.index)
+        if len(missing_bm) > 0:
+            raise InsufficientDataError(
+                f"benchmark_prices is missing {len(missing_bm)} trading session(s) present in "
+                "asset_prices; alignment without return stitching or filling is not possible.",
+                details={"series": "benchmark_prices", "missing_count": int(len(missing_bm))},
+            )
+        bm_in_range = bm_s.loc[price_s.index[0] : price_s.index[-1]]
+        extra_bm = bm_in_range.index.difference(price_s.index)
+        if len(extra_bm) > 0:
+            raise InsufficientDataError(
+                f"asset_prices is missing {len(extra_bm)} trading session(s) present in "
+                "benchmark_prices within the aligned window; return stitching is prohibited.",
+                details={"series": "asset_prices", "missing_count": int(len(extra_bm))},
+            )
+        bm_s = bm_s.loc[price_s.index]
+
     if vol_s is not None:
-        common_idx = price_s.index.intersection(vol_s.index)
-        price_s = price_s.loc[common_idx]
-        if bm_s is not None:
-            bm_s = bm_s.loc[common_idx]
-        vol_s = vol_s.loc[common_idx]
+        missing_vol = price_s.index.difference(vol_s.index)
+        if len(missing_vol) > 0:
+            raise InsufficientDataError(
+                f"volumes is missing {len(missing_vol)} trading session(s) present in "
+                "asset_prices; alignment without return stitching or filling is not possible.",
+                details={"series": "volumes", "missing_count": int(len(missing_vol))},
+            )
+        vol_s = vol_s.loc[price_s.index]
 
     min_required = max(max(windows), max(lags), 63) + horizon_days + 2
     if len(price_s) < min_required:
@@ -280,11 +365,13 @@ def build_volatility_features(
         np.sqrt(downside_sq.rolling(window=21, min_periods=21).mean()).shift(1) * ann_factor
     )
 
-    # Rolling 21d max drawdown strictly on prices up to t - 1
+    # True 21-observation maximum drawdown ending at t - 1:
+    # At timestamp t, lagged_price.rolling(21) spans prices [t-21, ..., t-1] and computes
+    # min(p / running_peak(p) - 1) within that exact 21-observation window.
     lagged_price = price_s.shift(1)
-    rolling_peak = lagged_price.rolling(window=21, min_periods=21).max()
-    drawdown_series = lagged_price / rolling_peak - 1.0
-    features["max_dd_21"] = drawdown_series.rolling(window=21, min_periods=21).min()
+    features["max_dd_21"] = lagged_price.rolling(window=21, min_periods=21).apply(
+        _window_max_drawdown, raw=True
+    )
 
     # 5. Deterministic calendar metadata known pre-open on day t
     if not isinstance(log_ret.index, pd.DatetimeIndex):
@@ -318,8 +405,8 @@ def build_volatility_features(
 
     X_raw = pd.DataFrame(features, index=log_ret.index)
 
-    # Target: forward h-day annualized realized volatility over [t, t + h - 1]
-    # rolling(h).mean() at index (t + h - 1) covers [t, t + h - 1]; shift(-(h - 1)) aligns to t.
+    # Target: forward h-day annualized RMS realized volatility over [t, t + h - 1].
+    # Note: RMS (uncentered second moment) = sqrt(252 / h * sum(r_i^2)), not sample std.
     fwd_var = log_ret.pow(2).rolling(window=horizon_days, min_periods=horizon_days).mean()
     y_raw = np.sqrt(fwd_var.shift(-(horizon_days - 1))) * ann_factor
     y_raw.name = f"fwd_vol_{horizon_days}d"
@@ -342,7 +429,15 @@ def build_volatility_features(
         [ret_idx[pos_map[pd.Timestamp(ts)] + horizon_days - 1] for ts in start_dates]
     )
 
-    snapshot_hash = _compute_snapshot_hash(price_s, bm_s, vol_s, horizon_days)
+    snapshot_hash = _compute_snapshot_hash(
+        price_s,
+        bm_s,
+        vol_s,
+        horizon_days=horizon_days,
+        trading_days_per_year=trading_days_per_year,
+        rolling_windows=windows,
+        return_lags=lags,
+    )
 
     return FeatureDataset(
         X=X_clean,

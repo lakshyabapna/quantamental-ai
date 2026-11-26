@@ -176,3 +176,121 @@ class TestFeaturePipelineAntiLeakage:
 
         with pytest.raises(AIEngineException):
             build_volatility_features(prices, horizon_days=0)
+
+    def test_max_dd_21_hand_calculated_and_exact_lookback_boundary(self) -> None:
+        """max_dd_21 must use exact 21 observations [t-21..t-1] relative to running peak."""
+        n_days = 160
+        dates = pd.bdate_range("2022-01-03", periods=n_days)
+        rng = np.random.default_rng(77)
+        rets = rng.normal(0.0002, 0.01, size=n_days)
+        prices = pd.Series(
+            (100.0 * np.exp(np.cumsum(rets))).tolist(),
+            index=dates,
+            name="TEST",
+            dtype=float,
+        )
+        # Put a huge spike at t - 22 (outside 21-obs window) and a known peak/trough inside [t-21..t-1]
+        ds_base = build_volatility_features(prices, horizon_days=5)
+        t_date = pd.Timestamp(ds_base.X.index[40])
+        pos_t = int(prices.index.get_loc(t_date))  # type: ignore[arg-type]
+
+        # Hand-compute max_dd_21 on exact slice prices[pos_t - 21 : pos_t]
+        window_21 = np.asarray(prices.iloc[pos_t - 21 : pos_t], dtype=np.float64)
+        assert len(window_21) == 21
+        running_peak = np.maximum.accumulate(window_21)
+        expected_dd = float(np.min(window_21 / running_peak - 1.0))
+        actual_dd = float(np.asarray(ds_base.X.loc[t_date, "max_dd_21"], dtype=np.float64))
+        assert actual_dd == pytest.approx(expected_dd, rel=1e-12, abs=1e-12)
+
+        # Perturb price at pos_t - 22 (outside 21-obs window) AND at pos_t (future/current)
+        prices_boundary = prices.copy()
+        prices_boundary.iloc[pos_t - 22] = prices_boundary.iloc[pos_t - 22] * 5.0
+        prices_boundary.iloc[pos_t] = prices_boundary.iloc[pos_t] * 2.5
+        ds_boundary = build_volatility_features(prices_boundary, horizon_days=5)
+        boundary_dd = float(np.asarray(ds_boundary.X.loc[t_date, "max_dd_21"], dtype=np.float64))
+        assert boundary_dd == pytest.approx(expected_dd, rel=1e-14, abs=1e-14)
+
+    def test_snapshot_hash_deterministic_and_timestamp_alignment_sensitive(self) -> None:
+        """Snapshot hash must be deterministic and sensitive to timestamps, values, and config."""
+        prices, bm, vols = _make_synthetic_market(n_days=180, seed=99)
+        ds1 = build_volatility_features(prices, benchmark_prices=bm, volumes=vols, horizon_days=21)
+        ds2 = build_volatility_features(prices, benchmark_prices=bm, volumes=vols, horizon_days=21)
+        assert ds1.data_snapshot_hash == ds2.data_snapshot_hash
+
+        # Same values, shifted timestamps -> different hash
+        shifted_dates = pd.bdate_range("2022-01-04", periods=len(prices))
+        prices_shift = pd.Series(prices.tolist(), index=shifted_dates, dtype=float)
+        bm_shift = pd.Series(bm.tolist(), index=shifted_dates, dtype=float)
+        vols_shift = pd.Series(vols.tolist(), index=shifted_dates, dtype=float)
+        ds_shift = build_volatility_features(
+            prices_shift, benchmark_prices=bm_shift, volumes=vols_shift, horizon_days=21
+        )
+        assert ds_shift.data_snapshot_hash != ds1.data_snapshot_hash
+
+        # Different horizon / annualization -> different hash
+        ds_h5 = build_volatility_features(prices, benchmark_prices=bm, volumes=vols, horizon_days=5)
+        assert ds_h5.data_snapshot_hash != ds1.data_snapshot_hash
+
+    def test_input_validation_duplicates_nat_inf_and_integer_sequences(self) -> None:
+        """Reject duplicate timestamps, NaT, Inf volumes, and non-integer/bool configs."""
+        prices, _, vols = _make_synthetic_market(n_days=160, seed=55)
+
+        # Duplicate timestamp in prices
+        dup_idx = prices.index.tolist()
+        dup_idx[10] = dup_idx[9]
+        prices_dup = pd.Series(prices.tolist(), index=pd.DatetimeIndex(dup_idx), dtype=float)
+        with pytest.raises(AIEngineException, match="duplicate"):
+            build_volatility_features(prices_dup, horizon_days=5)
+
+        # NaT in prices index
+        nat_idx = prices.index.tolist()
+        nat_idx[5] = pd.NaT
+        prices_nat = pd.Series(prices.tolist(), index=pd.DatetimeIndex(nat_idx), dtype=float)
+        with pytest.raises(AIEngineException, match="NaT"):
+            build_volatility_features(prices_nat, horizon_days=5)
+
+        # +inf and -inf in volumes
+        for bad_val in (np.inf, -np.inf):
+            vols_inf = vols.copy()
+            vols_inf.iloc[15] = bad_val
+            with pytest.raises(AIEngineException, match="non-finite"):
+                build_volatility_features(prices, volumes=vols_inf, horizon_days=5)
+
+        # Invalid rolling_windows / return_lags (bool, float, empty)
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, rolling_windows=[True, 21])  # type: ignore[list-item]
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, rolling_windows=[5.5, 21])  # type: ignore[list-item]
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, return_lags=[1.0, 2])  # type: ignore[list-item]
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, return_lags=[])
+
+        # Invalid trading_days_per_year
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, trading_days_per_year=True)  # type: ignore[arg-type]
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, trading_days_per_year=252.0)  # type: ignore[arg-type]
+        with pytest.raises(AIEngineException):
+            build_volatility_features(prices, trading_days_per_year=0)
+
+    def test_missing_intermediate_benchmark_or_volume_date_rejected_without_stitching(
+        self,
+    ) -> None:
+        """Missing intermediate dates in benchmark or volumes must raise without stitching returns."""
+        prices, bm, vols = _make_synthetic_market(n_days=200, seed=88)
+
+        # Drop one intermediate trading session from benchmark_prices
+        bm_missing = bm.drop(bm.index[50])
+        with pytest.raises(InsufficientDataError, match="benchmark_prices is missing"):
+            build_volatility_features(prices, benchmark_prices=bm_missing, horizon_days=21)
+
+        # Drop one intermediate trading session from volumes
+        vols_missing = vols.drop(vols.index[75])
+        with pytest.raises(InsufficientDataError, match="volumes is missing"):
+            build_volatility_features(prices, volumes=vols_missing, horizon_days=21)
+
+        # Drop one intermediate trading session from asset_prices while benchmark is complete
+        prices_missing = prices.drop(prices.index[60])
+        with pytest.raises(InsufficientDataError, match="asset_prices is missing"):
+            build_volatility_features(prices_missing, benchmark_prices=bm, horizon_days=21)
